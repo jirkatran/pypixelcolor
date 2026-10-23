@@ -5,6 +5,7 @@ import sys
 
 from ..commands.send_image import send_image_hex
 from ..commands.send_text import send_text
+from ..commands.show_slot import show_slot
 from ..lib.device_session import DeviceSession
 from ..scanner import scan_devices
 
@@ -40,23 +41,31 @@ class PanelConnection:
         self.session = session
         return self.status()
 
+    async def prepare_saved_banner(self):
+        result = await self.session.execute_command(show_slot, 1)
+        if not result.success:
+            raise RuntimeError(result.message or 'Panel nepotvrdil nastavení seznamu s jediným bannerem.')
+
     async def send(self, address, image):
         await self.connect(address)
-        result = await self.session.execute_command(send_image_hex, image, '.png')
+        # Program list must be declared before uploading every listed slot.
+        await self.prepare_saved_banner()
+        result = await self.session.execute_command(send_image_hex, image, '.png', save_slot=1)
         if not result.success:
             raise RuntimeError(result.message or 'Panel nepotvrdil přijetí obrázku.')
-        return {**self.status(), 'message': 'Banner byl odeslán do panelu.'}
+        return {**self.status(), 'message': 'Banner byl odeslán a uložen do paměti panelu (slot 1).'}
 
     async def send_scrolling_text(self, request):
         await self.connect(request['address'])
+        await self.prepare_saved_banner()
         # This panel was visually verified with the default 16 px native font.
         # Omit custom font/background properties, which produced corrupt glyphs.
         result = await self.session.execute_command(
             send_text, request['text'], animation='scroll_left',
-            speed=request['speed'], color=request['color'])
+            speed=request['speed'], color=request['color'], save_slot=1)
         if not result.success:
             raise RuntimeError(result.message or 'Panel nepotvrdil přijetí textu.')
-        return {**self.status(), 'message': 'Text s posunem doleva byl odeslán do panelu.'}
+        return {**self.status(), 'message': 'Text s posunem doleva byl odeslán a uložen do paměti panelu (slot 1).'}
 
     async def handle(self, request):
         action = request['action']

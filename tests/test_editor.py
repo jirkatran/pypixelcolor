@@ -2,7 +2,7 @@
 import base64
 from io import BytesIO
 import unittest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock, call
 from PIL import Image
 from pypixelcolor.editor.__main__ import decode_frame
 from pypixelcolor.editor.transport import send
@@ -72,7 +72,10 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             await connection.send('second', '00')
         first.disconnect.assert_awaited_once()
         first.execute_command.assert_not_awaited()
-        second.execute_command.assert_awaited_once()
+        from pypixelcolor.commands.send_image import send_image_hex
+        from pypixelcolor.commands.show_slot import show_slot
+        self.assertEqual(second.execute_command.await_args_list, [
+            call(show_slot, 1), call(send_image_hex, '00', '.png', save_slot=1)])
         self.assertEqual(connection.status(), {'connected': True, 'address': 'second'})
 
     async def test_same_panel_reuses_connection_and_disconnect_clears_status(self):
@@ -135,11 +138,25 @@ class MotionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         text = 'DLOUHY TEXT KTERY SE NEVEJDE NA PANEL'
         await connection.handle(dict(action='send', address='panel', animation='scroll_left',
                                      text=text, speed=75, size=12, color='ff7338', background='000000'))
-        args, kwargs = session.execute_command.call_args
+        args, kwargs = session.execute_command.call_args_list[1]
         from pypixelcolor.commands.send_text import send_text
         self.assertIs(args[0], send_text)
         self.assertEqual(args[1], text)
         self.assertEqual(kwargs['animation'], 'scroll_left')
         self.assertEqual(kwargs['speed'], 75)
+        self.assertEqual(kwargs['save_slot'], 1)
         self.assertNotIn('font', kwargs)
         self.assertNotIn('bg_color', kwargs)
+        from pypixelcolor.commands.show_slot import show_slot
+        self.assertEqual(session.execute_command.await_args_list[0], call(show_slot, 1))
+
+
+class SavedSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_selection_failure_is_reported(self):
+        from pypixelcolor.editor.transport import PanelConnection
+        connection = PanelConnection()
+        connection.session = MagicMock()
+        connection.session.execute_command = AsyncMock(
+            return_value=MagicMock(success=False, message='No ACK'))
+        with self.assertRaisesRegex(RuntimeError, 'No ACK'):
+            await connection.prepare_saved_banner()
